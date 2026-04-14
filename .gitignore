@@ -1,9 +1,6 @@
 # Build output
 target/
 
-# Documentation files
-*.md
-
 # IDE files
 .idea/
 *.iml
