@@ -38,8 +38,10 @@ public class BookingService {
             throw new BusinessException("Show is not available for booking. Status: " + show.getStatus());
         }
 
+        List<Long> sortedSeatIds = request.getShowSeatIds().stream()
+                .sorted().collect(Collectors.toList());
         List<ShowSeat> selectedSeats = showSeatRepository.findAvailableSeatsForLock(
-                request.getShowId(), request.getShowSeatIds());
+                request.getShowId(), sortedSeatIds);
 
         if (selectedSeats.size() != request.getShowSeatIds().size()) {
             throw new BusinessException("One or more selected seats are no longer available. Please choose different seats.");
