@@ -2,6 +2,8 @@ package com.xyz.moviebooking.controller;
 
 import com.xyz.moviebooking.dto.BookingRequest;
 import com.xyz.moviebooking.dto.BookingResponse;
+import com.xyz.moviebooking.dto.SeatReservationRequest;
+import com.xyz.moviebooking.dto.SeatReservationResponse;
 import com.xyz.moviebooking.service.BookingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -21,9 +23,16 @@ public class BookingController {
 
     private final BookingService bookingService;
 
-    @PostMapping
-    @Operation(summary = "WRITE: Book movie tickets (applies discounts: 3rd ticket 50% off / afternoon 20% off)",
-               description = "Books selected seats for a show. Discount engine auto-applies best available offer.")
+    @PostMapping("/reserve")
+    @Operation(summary = "WRITE: Phase 1 — Reserve seats (10-min hold, optimistic locking)",
+               description = "Temporarily locks selected seats for 10 minutes. Call /confirm after payment.")
+    public ResponseEntity<SeatReservationResponse> reserveSeats(@Valid @RequestBody SeatReservationRequest request) {
+        return ResponseEntity.status(HttpStatus.OK).body(bookingService.reserveSeats(request));
+    }
+
+    @PostMapping("/confirm")
+    @Operation(summary = "WRITE: Phase 2 — Confirm booking after payment (applies discounts)",
+               description = "Confirms booking for reserved seats. Seats must be reserved first via /reserve.")
     public ResponseEntity<BookingResponse> bookTickets(@Valid @RequestBody BookingRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(bookingService.bookTickets(request));
     }

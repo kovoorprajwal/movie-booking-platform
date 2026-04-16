@@ -37,5 +37,8 @@ public class ShowSeat {
     @JoinColumn(name = "booking_id")
     private Booking booking;
 
+    @Version
+    private Long version;
+
     public enum SeatStatus { AVAILABLE, LOCKED, BOOKED, BLOCKED }
 }

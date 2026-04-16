@@ -5,6 +5,8 @@ import com.xyz.moviebooking.discount.DiscountEngine;
 import com.xyz.moviebooking.discount.DiscountResult;
 import com.xyz.moviebooking.dto.BookingRequest;
 import com.xyz.moviebooking.dto.BookingResponse;
+import com.xyz.moviebooking.dto.SeatReservationRequest;
+import com.xyz.moviebooking.dto.SeatReservationResponse;
 import com.xyz.moviebooking.exception.BusinessException;
 import com.xyz.moviebooking.exception.ResourceNotFoundException;
 import com.xyz.moviebooking.model.*;
@@ -12,9 +14,11 @@ import com.xyz.moviebooking.repository.BookingRepository;
 import com.xyz.moviebooking.repository.ShowRepository;
 import com.xyz.moviebooking.repository.ShowSeatRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
@@ -30,6 +34,45 @@ public class BookingService {
     private final DiscountEngine discountEngine;
 
     @Transactional
+    public SeatReservationResponse reserveSeats(SeatReservationRequest request) {
+        Show show = showRepository.findById(request.getShowId())
+                .orElseThrow(() -> new ResourceNotFoundException("Show not found: " + request.getShowId()));
+
+        if (show.getStatus() != Show.ShowStatus.SCHEDULED) {
+            throw new BusinessException("Show is not available for booking. Status: " + show.getStatus());
+        }
+
+        List<Long> sortedSeatIds = request.getShowSeatIds().stream().sorted().collect(Collectors.toList());
+        List<ShowSeat> seats = showSeatRepository.findAvailableSeats(request.getShowId(), sortedSeatIds);
+
+        if (seats.size() != request.getShowSeatIds().size()) {
+            throw new BusinessException("One or more seats are not available. Please choose different seats.");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime expiresAt = now.plusMinutes(10);
+        seats.forEach(seat -> {
+            seat.setStatus(ShowSeat.SeatStatus.LOCKED);
+            seat.setLockedAt(now);
+            seat.setLockedByUserId(request.getUserId());
+        });
+
+        try {
+            showSeatRepository.saveAll(seats);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            throw new BusinessException("One or more seats were just taken by another user. Please select different seats.");
+        }
+
+        return SeatReservationResponse.builder()
+                .showId(request.getShowId())
+                .seatCodes(seats.stream().map(ss -> ss.getSeat().getSeatCode()).collect(Collectors.toList()))
+                .reservedAt(now)
+                .expiresAt(expiresAt)
+                .message("Seats reserved for 10 minutes. Complete payment to confirm booking.")
+                .build();
+    }
+
+    @Transactional
     public BookingResponse bookTickets(BookingRequest request) {
         Show show = showRepository.findById(request.getShowId())
                 .orElseThrow(() -> new ResourceNotFoundException("Show not found: " + request.getShowId()));
@@ -38,13 +81,11 @@ public class BookingService {
             throw new BusinessException("Show is not available for booking. Status: " + show.getStatus());
         }
 
-        List<Long> sortedSeatIds = request.getShowSeatIds().stream()
-                .sorted().collect(Collectors.toList());
-        List<ShowSeat> selectedSeats = showSeatRepository.findAvailableSeatsForLock(
-                request.getShowId(), sortedSeatIds);
+        List<ShowSeat> selectedSeats = showSeatRepository.findLockedSeatsByUser(
+                request.getShowId(), request.getShowSeatIds(), request.getCustomerEmail());
 
         if (selectedSeats.size() != request.getShowSeatIds().size()) {
-            throw new BusinessException("One or more selected seats are no longer available. Please choose different seats.");
+            throw new BusinessException("Seat reservation expired or not found. Please reserve seats again.");
         }
 
         double baseAmountPerTicket = show.getBasePrice();
@@ -77,11 +118,17 @@ public class BookingService {
 
         Booking savedBooking = bookingRepository.save(booking);
 
-        selectedSeats.forEach(seat -> {
-            seat.setStatus(ShowSeat.SeatStatus.BOOKED);
-            seat.setBooking(savedBooking);
-        });
-        showSeatRepository.saveAll(selectedSeats);
+        try {
+            selectedSeats.forEach(seat -> {
+                seat.setStatus(ShowSeat.SeatStatus.BOOKED);
+                seat.setLockedAt(null);
+                seat.setLockedByUserId(null);
+                seat.setBooking(savedBooking);
+            });
+            showSeatRepository.saveAll(selectedSeats);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            throw new BusinessException("Booking conflict detected. Please try again.");
+        }
 
         return toBookingResponse(savedBooking, selectedSeats);
     }
